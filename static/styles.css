@@ -1,0 +1,153 @@
+:root {
+  --bg: #f4f3ef;
+  --surface: #fffdf8;
+  --ink: #1c1b18;
+  --accent: #2f7f6d;
+  --accent-2: #bd5f3b;
+  --line: #ddd7cc;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  color: var(--ink);
+  background: radial-gradient(circle at top right, #f2e2cc 0%, var(--bg) 50%);
+  min-height: 100vh;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1rem;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.08);
+}
+
+.chat-log {
+  height: 55vh;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.75rem;
+  background: #fff;
+}
+
+.msg {
+  margin-bottom: 0.75rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+}
+
+.msg-role {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.2rem;
+  opacity: 0.8;
+}
+
+.msg-body {
+  white-space: pre-wrap;
+  line-height: 1.35;
+}
+
+.msg.user {
+  background: #e4f2ee;
+}
+
+.msg.assistant {
+  background: #f8eee8;
+}
+
+.msg.tool {
+  background: #e8f7ec;
+  border-left: 3px solid #2f9e44;
+  font-size: 0.9rem;
+}
+
+.chat-form {
+  margin-top: 0.75rem;
+  display: grid;
+  grid-template-columns: 90px 1fr 90px;
+  gap: 0.5rem;
+}
+
+input,
+button {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.6rem;
+  font-size: 0.95rem;
+}
+
+button {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #216452;
+}
+
+#load-workout {
+  background: var(--accent-2);
+  margin-bottom: 0.75rem;
+}
+
+.workout-output {
+  margin: 0;
+  min-height: 50vh;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.75rem;
+  background: #fff;
+}
+
+.workout-day {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.6rem;
+  margin-bottom: 0.6rem;
+}
+
+.workout-day h3 {
+  margin: 0 0 0.4rem 0;
+  font-size: 1rem;
+}
+
+.workout-day ul {
+  margin: 0;
+  padding-left: 1rem;
+}
+
+.workout-day li {
+  margin-bottom: 0.35rem;
+}
+
+.video-link {
+  margin-left: 0.4rem;
+  font-size: 0.85rem;
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-form {
+    grid-template-columns: 1fr;
+  }
+}

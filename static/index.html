@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Gym Coach</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          fontFamily: {
+            display: ["Space Grotesk", "sans-serif"],
+            mono: ["IBM Plex Mono", "monospace"],
+          },
+          colors: {
+            sand: "#f8f4ec",
+            clay: "#d2673b",
+            pine: "#1f6e63",
+            pineDark: "#164f47",
+            ink: "#1f1e1c",
+          },
+          boxShadow: {
+            card: "0 10px 35px rgba(28, 29, 32, 0.08)",
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    body {
+      font-family: "Space Grotesk", sans-serif;
+      background:
+        radial-gradient(circle at 10% 10%, rgba(210, 103, 59, 0.2) 0%, transparent 35%),
+        radial-gradient(circle at 90% 20%, rgba(31, 110, 99, 0.18) 0%, transparent 30%),
+        #f3efe6;
+      color: #1f1e1c;
+    }
+
+    html.dark body {
+      background:
+        radial-gradient(circle at 10% 8%, rgba(210, 103, 59, 0.14) 0%, transparent 35%),
+        radial-gradient(circle at 92% 12%, rgba(31, 110, 99, 0.18) 0%, transparent 32%),
+        #11151a;
+      color: #e8e8e6;
+    }
+
+    .glass {
+      background: rgba(255, 255, 255, 0.88);
+      backdrop-filter: blur(6px);
+    }
+
+    html.dark .glass {
+      background: rgba(26, 31, 37, 0.86);
+    }
+  </style>
+</head>
+<body class="min-h-screen">
+  <main class="mx-auto grid w-[98vw] max-w-[2200px] grid-cols-1 gap-4 p-3 sm:gap-6 sm:p-6 xl:gap-10 xl:p-10 lg:grid-cols-5">
+    <section class="glass col-span-1 rounded-2xl border border-white/70 p-4 shadow-card dark:border-zinc-700 sm:p-6 xl:p-8 lg:col-span-3">
+      <div class="mb-4 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p class="font-mono text-xs uppercase tracking-[0.2em] text-pine dark:text-emerald-300">Coach Console</p>
+          <h1 class="font-display text-3xl font-bold leading-tight sm:text-4xl xl:text-6xl">AI Gym Coach</h1>
+        </div>
+        <div class="flex w-full items-end gap-2 sm:w-auto">
+          <div class="w-full sm:w-40">
+            <label for="user-id" class="mb-1 block font-mono text-xs uppercase tracking-wider text-zinc-600 dark:text-zinc-300">User ID</label>
+            <input
+              id="user-id"
+              type="number"
+              min="1"
+              value="1"
+              placeholder="User ID"
+              required
+              class="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm outline-none transition focus:border-pine focus:ring-2 focus:ring-pine/25 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100"
+            />
+          </div>
+          <input
+            id="load-chats"
+            type="button"
+            value="Load Chats"
+            class="h-[42px] rounded-xl border border-zinc-300 bg-white px-3 text-xs font-semibold uppercase tracking-wide text-zinc-700 shadow-sm transition hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+          />
+          <input
+            id="theme-toggle"
+            type="button"
+            value="Night"
+            class="h-[42px] rounded-xl border border-zinc-300 bg-white px-3 text-xs font-semibold uppercase tracking-wide text-zinc-700 shadow-sm transition hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+          />
+        </div>
+      </div>
+
+      <div id="chat-log" class="h-[52vh] overflow-y-auto rounded-2xl border border-zinc-200 bg-white/90 p-3 dark:border-zinc-700 dark:bg-zinc-900/70 sm:h-[60vh] sm:p-4 xl:h-[68vh] xl:p-5"></div>
+
+      <form id="chat-form" class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto]">
+        <input
+          id="message"
+          type="text"
+          placeholder="Ask for a workout plan, edits, progress, or delete commands..."
+          required
+          class="rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm outline-none transition focus:border-pine focus:ring-2 focus:ring-pine/25 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100"
+        />
+        <button
+          type="submit"
+          class="rounded-xl bg-pine px-5 py-3 text-sm font-semibold text-white transition hover:bg-pineDark focus:outline-none focus:ring-2 focus:ring-pine/30"
+        >
+          Send
+        </button>
+      </form>
+    </section>
+
+    <section class="glass col-span-1 rounded-2xl border border-white/70 p-4 shadow-card dark:border-zinc-700 sm:p-6 xl:p-8 lg:col-span-2">
+      <div class="mb-4 flex items-center justify-between gap-3">
+        <div>
+          <p class="font-mono text-xs uppercase tracking-[0.2em] text-clay dark:text-orange-300">Planner</p>
+          <h2 class="font-display text-2xl font-bold xl:text-4xl">Latest Workout Plan</h2>
+        </div>
+        <button
+          id="load-workout"
+          class="rounded-xl bg-clay px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#b9572f] focus:outline-none focus:ring-2 focus:ring-clay/30"
+        >
+          Load Latest
+        </button>
+      </div>
+
+      <section class="mb-3 rounded-xl border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-900/70">
+        <p class="font-mono text-[11px] uppercase tracking-[0.16em] text-zinc-600 dark:text-zinc-300">Session Cost (Estimate)</p>
+        <div class="mt-2 grid grid-cols-2 gap-2 text-xs sm:text-sm">
+          <div class="rounded-lg bg-white p-2 dark:bg-zinc-800">
+            <p class="text-zinc-500 dark:text-zinc-400">Input Tokens</p>
+            <p id="cost-input-tokens" class="font-semibold">0</p>
+          </div>
+          <div class="rounded-lg bg-white p-2 dark:bg-zinc-800">
+            <p class="text-zinc-500 dark:text-zinc-400">Output Tokens</p>
+            <p id="cost-output-tokens" class="font-semibold">0</p>
+          </div>
+          <div class="rounded-lg bg-white p-2 dark:bg-zinc-800">
+            <p class="text-zinc-500 dark:text-zinc-400">Total Tokens</p>
+            <p id="cost-total-tokens" class="font-semibold">0</p>
+          </div>
+          <div class="rounded-lg bg-white p-2 dark:bg-zinc-800">
+            <p class="text-zinc-500 dark:text-zinc-400">Estimated USD</p>
+            <p id="cost-usd" class="font-semibold">$0.000000</p>
+          </div>
+        </div>
+        <p id="cost-model" class="mt-2 text-[11px] text-zinc-500 dark:text-zinc-400">Model: N/A</p>
+      </section>
+
+      <div id="workout-output" class="h-[44vh] overflow-y-auto rounded-2xl border border-zinc-200 bg-white/90 p-3 dark:border-zinc-700 dark:bg-zinc-900/70 sm:h-[47vh] sm:p-4 xl:h-[56vh] xl:p-5"></div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
