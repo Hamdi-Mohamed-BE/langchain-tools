@@ -6,6 +6,7 @@ An AI-powered gym coaching chatbot that generates personalized weekly workout pl
 
 <video src="videos/ai_gym.mp4" width="100%" controls></video>
 
+> If the video doesn't render, [click here to watch](videos/ai_gym.mp4)
 ---
 
 ## Features
