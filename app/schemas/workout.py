@@ -2,6 +2,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 from pydantic import ConfigDict
+from pydantic import model_validator
 
 
 class GenerateWorkoutRequest(BaseModel):
@@ -21,6 +22,31 @@ class WorkoutDay(BaseModel):
     title: str
     focus: str
     exercises: list[WorkoutExercise]
+
+
+class WorkoutExerciseDraft(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    sets: int = Field(default=3, ge=1, le=8)
+    reps: str = Field(default="8-12", min_length=1, max_length=32)
+
+
+class WorkoutDayDraft(BaseModel):
+    title: str = Field(min_length=2, max_length=120)
+    focus: str = Field(min_length=2, max_length=120)
+    exercises: list[WorkoutExerciseDraft] = Field(min_length=1, max_length=10)
+
+
+class WorkoutPlanDraft(BaseModel):
+    goal: str = Field(min_length=2, max_length=160)
+    days_per_week: int = Field(ge=2, le=6)
+    weekly_plan: list[WorkoutDayDraft] = Field(min_length=2, max_length=6)
+    notes: str = Field(default="", max_length=600)
+
+    @model_validator(mode="after")
+    def validate_days_match(self) -> "WorkoutPlanDraft":
+        if len(self.weekly_plan) != self.days_per_week:
+            raise ValueError("weekly_plan length must match days_per_week")
+        return self
 
 
 class WorkoutProgressEntry(BaseModel):

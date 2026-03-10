@@ -7,6 +7,7 @@ from langchain_core.tools import BaseTool
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.core.config import settings
+from app.schemas.workout import WorkoutPlanDraft
 
 
 class LLMClient:
@@ -20,9 +21,14 @@ class LLMClient:
     @staticmethod
     def _system_prompt() -> str:
         return (
-            "You are an AI gym coach. Keep responses concise, safe, and actionable. "
-            "If tools are available, use them whenever they help execute user actions. "
-            "Prefer compact summaries over verbose details."
+            "You are FitCoach AI — a motivating, knowledgeable personal trainer. "
+            "Speak in a friendly, encouraging tone with energy — use occasional emojis (💪🔥🏋️) "
+            "but stay professional. Structure responses with clear headings and bullet points. "
+            "When presenting workout plans, use numbered lists with exercise details. "
+            "Give brief, actionable advice. Celebrate user progress. "
+            "If tools are available, use them to execute user actions — never expose tool internals. "
+            "Keep responses under 300 words unless the user asks for detail."
+            "if user shares a plan always respect it and generate based on his thoughts"
         )
 
     async def generate_response(
@@ -69,10 +75,38 @@ class LLMClient:
         tools: list[BaseTool] | None = None,
     ) -> AsyncGenerator[str, None]:
         if tools:
-            # Execute tools through create_agent, then stream final text as chunks.
-            final = await self.generate_response(user_message=user_message, context=context, tools=tools)
-            for token in final.split():
-                yield token + " "
+            system_prompt = self._system_prompt()
+            agent = create_agent(
+                model=self.llm,
+                tools=tools,
+                system_prompt=system_prompt,
+            )
+
+            async for event in agent.astream_events(
+                {"messages": [{"role": "user", "content": f"Context: {context}\n\nUser: {user_message}"}]},
+                version="v2",
+            ):
+                if event.get("event") != "on_chat_model_stream":
+                    continue
+
+                data = event.get("data")
+                if not isinstance(data, dict):
+                    continue
+
+                chunk = data.get("chunk")
+
+                # Skip chunks that are tool-call arguments (JSON noise).
+                tool_call_chunks = getattr(chunk, "tool_call_chunks", None)
+                if tool_call_chunks:
+                    continue
+                tool_calls = getattr(chunk, "tool_calls", None)
+                if tool_calls:
+                    continue
+
+                content = getattr(chunk, "content", "")
+                text = self._content_to_text(content)
+                if text:
+                    yield text
             return
 
         messages = [
@@ -89,12 +123,50 @@ class LLMClient:
             if text:
                 yield text
 
+    def generate_structured_workout_plan(
+        self,
+        goal: str,
+        days_per_week: int,
+        context: str = "",
+    ) -> WorkoutPlanDraft:
+        planner = self.llm.with_structured_output(WorkoutPlanDraft)
+        prompt = (
+            "Create a personalized weekly workout plan. "
+            "Return valid structured data only. "
+            "Rules: include exactly the requested number of days; "
+            "each day must contain distinct exercises; "
+            "sets must be 1-8 and reps must be a compact range like 6-10 or 10-15."
+        )
+        message = (
+            f"Goal: {goal}\n"
+            f"Days per week: {days_per_week}\n"
+            f"Context: {context or 'none'}"
+        )
+        result = planner.invoke(
+            [
+                SystemMessage(content=prompt),
+                HumanMessage(content=message),
+            ]
+        )
+        if isinstance(result, WorkoutPlanDraft):
+            return result
+        return WorkoutPlanDraft.model_validate(result)
+
     @staticmethod
     def _extract_agent_text(result: Any) -> str:
         messages = result.get("messages", []) if isinstance(result, dict) else []
+
+        # Walk backwards to find the last AIMessage that is a plain text reply
+        # (not a tool-call invocation).
         for msg in reversed(messages):
-            if isinstance(msg, AIMessage):
-                return LLMClient._content_to_text(msg.content)
+            if not isinstance(msg, AIMessage):
+                continue
+            # Skip messages that are tool-call requests (contain JSON args, not user text).
+            if getattr(msg, "tool_calls", None):
+                continue
+            text = LLMClient._content_to_text(msg.content)
+            if text.strip():
+                return text
 
         output = result.get("output") if isinstance(result, dict) else None
         if output is not None:

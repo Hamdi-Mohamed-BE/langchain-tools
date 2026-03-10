@@ -5,10 +5,11 @@ from urllib.parse import parse_qs, urlparse
 
 from langchain.tools import tool
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.schemas.workout import WorkoutDay, WorkoutExercise, WorkoutPlanData, WorkoutProgressData
+from app.ai.llm_client import LLMClient
 from app.services.exercise_service import ExerciseService
 from app.tools.db_tools import (
     build_compact_workout_snapshot,
@@ -27,22 +28,6 @@ logger = logging.getLogger(__name__)
 class GeneratePlanInput(BaseModel):
     goal: str = Field(description="Workout goal, e.g. muscle gain, fat loss, strength")
     days_per_week: int = Field(default=4, ge=2, le=6, description="Training days per week")
-
-
-class ExerciseLookupInput(BaseModel):
-    exercise_names: list[str] = Field(
-        default_factory=list,
-        description="Exercise names to fetch matching YouTube Shorts videos for",
-    )
-    default_muscle_group: str = Field(default="general", description="Fallback muscle tag for metadata")
-    limit: int = Field(default=6, ge=1, le=20, description="Maximum exercises to return")
-
-    @model_validator(mode="after")
-    def validate_lookup_mode(self) -> "ExerciseLookupInput":
-        has_names = any(name.strip() for name in self.exercise_names)
-        if not has_names:
-            raise ValueError("Provide at least one exercise name.")
-        return self
 
 
 class UpdateProgressInput(BaseModel):
@@ -107,171 +92,72 @@ class AgentToolsBuilder:
     def _context(self) -> tuple[Session, int, ExerciseService]:
         return self._require()
 
-    @staticmethod
-    def _resolve_muscle_targets(days_per_week: int) -> list[tuple[str, str]]:
-        split = [
-            ("Day 1: Chest + Triceps", "chest"),
-            ("Day 2: Back + Biceps", "back"),
-            ("Day 3: Legs", "legs"),
-            ("Day 4: Shoulders + Core", "shoulders"),
-            ("Day 5: Upper Body Volume", "chest"),
-            ("Day 6: Pull Volume", "back"),
-        ]
-        return split[: max(2, min(days_per_week, 6))]
+    def _build_real_data_plan(self, goal: str, days_per_week: int, exercise_service: ExerciseService) -> WorkoutPlanData:
+        db, user_id, _ = self._context()
+        llm = LLMClient()
+        context_snapshot = build_compact_workout_snapshot(db, user_id)
 
-    @staticmethod
-    def _reps_for_goal(goal: str) -> str:
-        lowered = goal.lower()
-        if "strength" in lowered:
-            return "4-6"
-        if "fat" in lowered or "cut" in lowered:
-            return "10-15"
-        return "6-12"
-
-    @staticmethod
-    def _prefers_machine_isolation(goal: str) -> bool:
-        lowered = goal.casefold()
-        return (
-            "machine" in lowered
-            or "isolation" in lowered
-            or "cable" in lowered
+        # Step 1: force the LLM to produce workout structure via strict schema.
+        draft = llm.generate_structured_workout_plan(
+            goal=goal,
+            days_per_week=max(2, min(days_per_week, 6)),
+            context=context_snapshot,
         )
 
-    @staticmethod
-    def _exercise_name_pool(muscle: str, machine_isolation: bool) -> list[str]:
-        machine_pool: dict[str, list[str]] = {
-            "chest": [
-                "Machine Chest Press",
-                "Incline Machine Press",
-                "Cable Fly",
-                "Pec Deck Fly",
-                "Single-Arm Cable Press",
-            ],
-            "back": [
-                "Lat Pulldown",
-                "Seated Cable Row",
-                "Machine High Row",
-                "Straight-Arm Pulldown",
-                "Single-Arm Cable Row",
-            ],
-            "legs": [
-                "Hack Squat Machine",
-                "Leg Press",
-                "Leg Extension",
-                "Seated Leg Curl",
-                "Glute Drive Machine",
-            ],
-            "shoulders": [
-                "Machine Shoulder Press",
-                "Cable Lateral Raise",
-                "Reverse Pec Deck",
-                "Cable Front Raise",
-                "Cable Y Raise",
-            ],
-        }
-        standard_pool: dict[str, list[str]] = {
-            "chest": [
-                "Barbell Bench Press",
-                "Incline Dumbbell Press",
-                "Chest Dip",
-                "Cable Fly",
-                "Push-Up",
-            ],
-            "back": [
-                "Pull-Up",
-                "Barbell Row",
-                "Lat Pulldown",
-                "Seated Cable Row",
-                "Dumbbell Row",
-            ],
-            "legs": [
-                "Back Squat",
-                "Romanian Deadlift",
-                "Leg Press",
-                "Walking Lunge",
-                "Leg Curl",
-            ],
-            "shoulders": [
-                "Overhead Press",
-                "Dumbbell Lateral Raise",
-                "Rear Delt Fly",
-                "Arnold Press",
-                "Upright Row",
-            ],
-        }
-        pool = machine_pool if machine_isolation else standard_pool
-        return pool.get(muscle, ["Compound Lift", "Accessory Lift", "Isolation Lift", "Core Finisher"])
-
-    @classmethod
-    def _select_day_exercise_names(
-        cls,
-        muscle: str,
-        goal: str,
-        count: int,
-        variant_index: int,
-    ) -> list[str]:
-        pool = cls._exercise_name_pool(muscle=muscle, machine_isolation=cls._prefers_machine_isolation(goal))
-        if not pool:
-            return []
-
-        safe_count = max(1, count)
-        start = variant_index % len(pool)
-        ordered = pool[start:] + pool[:start]
-        unique: list[str] = []
-        for name in ordered:
-            if name in unique:
-                continue
-            unique.append(name)
-            if len(unique) >= safe_count:
-                break
-        return unique
-
-    def _build_real_data_plan(self, goal: str, days_per_week: int, exercise_service: ExerciseService) -> WorkoutPlanData:
-        rep_range = self._reps_for_goal(goal)
+        # Step 2: enrich each generated exercise with a YouTube video when available.
         weekly_days: list[WorkoutDay] = []
-
-        for day_idx, (day_title, muscle) in enumerate(self._resolve_muscle_targets(days_per_week)):
-            chosen_names = self._select_day_exercise_names(
-                muscle=muscle,
-                goal=goal,
-                count=4,
-                variant_index=day_idx,
+        for day in draft.weekly_plan:
+            generated_names = [exercise.name for exercise in day.exercises]
+            enriched = exercise_service.get_exercises_by_names(
+                exercise_names=generated_names,
+                default_muscle_group=day.focus,
             )
+            video_by_name = {
+                item.name.casefold().strip(): self._safe_video_url(str(item.video_url)) if item.video_url else None
+                for item in enriched
+            }
 
             day_exercises: list[WorkoutExercise] = []
-            for idx, selected_name in enumerate(chosen_names):
-                match = self._fetch_video_for_name(
-                    exercise_service=exercise_service,
-                    exercise_name=selected_name,
-                    default_muscle_group=muscle,
-                )
+            for exercise in day.exercises:
+                key = exercise.name.casefold().strip()
                 day_exercises.append(
                     WorkoutExercise(
-                        name=selected_name,
-                        sets=4 if idx == 0 else 3,
-                        reps=rep_range,
-                        video_url=self._safe_video_url(str(match.video_url)) if (match and match.video_url) else None,
+                        name=exercise.name,
+                        sets=exercise.sets,
+                        reps=exercise.reps,
+                        video_url=video_by_name.get(key),
                     )
                 )
 
             weekly_days.append(
                 WorkoutDay(
-                    title=day_title,
-                    focus=f"{goal} ({muscle})",
+                    title=day.title,
+                    focus=day.focus,
                     exercises=day_exercises,
                 )
             )
 
         return WorkoutPlanData(
-            goal=goal,
-            days_per_week=max(2, min(days_per_week, 6)),
+            goal=draft.goal,
+            days_per_week=draft.days_per_week,
             weekly_plan=weekly_days,
-            notes=(
-                "Built from YouTube Shorts exercise search data when available. "
-                "Progressive overload: add reps first, then load by 2.5-5%."
-            ),
+            notes=draft.notes or "Plan generated by AI and enriched with YouTube videos.",
             progress=WorkoutProgressData(),
         )
+
+    def _fill_missing_video_urls(self, plan: WorkoutPlanData, exercise_service: ExerciseService) -> WorkoutPlanData:
+        for day in plan.weekly_plan:
+            for exercise in day.exercises:
+                if exercise.video_url:
+                    continue
+                match = self._fetch_video_for_name(
+                    exercise_service=exercise_service,
+                    exercise_name=exercise.name,
+                    default_muscle_group=day.focus,
+                )
+                if match and match.video_url:
+                    exercise.video_url = self._safe_video_url(str(match.video_url))
+        return plan
 
     def _fetch_video_for_name(
         self,
@@ -346,42 +232,16 @@ class AgentToolsBuilder:
             f"Generating plan for goal='{goal}', days={days_per_week}",
         )
         plan = self._build_real_data_plan(goal=goal, days_per_week=days_per_week, exercise_service=exercise_service)
+        plan = self._fill_missing_video_urls(plan=plan, exercise_service=exercise_service)
         save_workout_plan(db=db, user_id=user_id, week_start=date.today(), plan=plan)
         self._log_tool("generate_and_save_workout_plan", "Saved generated workout plan")
         return {
             "status": "saved",
-            "source": "youtube_shorts_api_or_fallback",
+            "source": "youtube_shorts_api",
             "goal": plan.goal,
             "days_per_week": plan.days_per_week,
             "day_titles": [day.title for day in plan.weekly_plan],
         }
-
-    def _lookup_youtube_shorts_exercises_action(
-        self,
-        exercise_names: list[str],
-        default_muscle_group: str = "general",
-        limit: int = 6,
-    ) -> list[dict]:
-        _db, _user_id, exercise_service = self._context()
-        safe_names = [name.strip() for name in exercise_names if isinstance(name, str) and name.strip()][:limit]
-        self._log_tool(
-            "lookup_youtube_shorts_exercises",
-            f"Fetching YouTube Shorts by exercise names count={len(safe_names)}, limit={limit}",
-        )
-        exercises = exercise_service.get_exercises_by_names(
-            exercise_names=safe_names,
-            default_muscle_group=default_muscle_group,
-        )
-
-        return [
-            {
-                "name": exercise.name,
-                "muscle_group": exercise.muscle_group,
-                "equipment": exercise.equipment,
-                "video_url": str(exercise.video_url) if exercise.video_url else None,
-            }
-            for exercise in exercises[:limit]
-        ]
 
     def _update_user_workout_progress_action(
         self,
@@ -423,6 +283,40 @@ class AgentToolsBuilder:
         if count == 0:
             return {"status": "no_plan", "message": "No workout plans found to delete."}
         return {"status": "deleted", "message": f"Deleted {count} workout plan(s)."}
+
+    def _refresh_exercise_videos_action(self) -> dict:
+        """Re-fetch YouTube videos for every exercise in the latest saved plan."""
+        db, user_id, exercise_service = self._context()
+        self._log_tool("refresh_exercise_videos", "Re-fetching YouTube videos for all exercises")
+        plan = get_latest_workout_plan_data(db=db, user_id=user_id)
+        if not plan:
+            return {"status": "no_plan", "message": "No saved workout plan found to refresh."}
+
+        refreshed_count = 0
+        for day in plan.weekly_plan:
+            names = [ex.name for ex in day.exercises]
+            enriched = exercise_service.get_exercises_by_names(
+                exercise_names=names,
+                default_muscle_group=day.focus,
+            )
+            video_by_name = {
+                item.name.casefold().strip(): self._safe_video_url(str(item.video_url)) if item.video_url else None
+                for item in enriched
+            }
+            for exercise in day.exercises:
+                key = exercise.name.casefold().strip()
+                new_url = video_by_name.get(key)
+                if new_url:
+                    exercise.video_url = new_url
+                    refreshed_count += 1
+
+        save_workout_plan(db=db, user_id=user_id, week_start=date.today(), plan=plan)
+        self._log_tool("refresh_exercise_videos", f"Refreshed {refreshed_count} video URLs")
+        return {
+            "status": "refreshed",
+            "message": f"Re-fetched YouTube videos for {refreshed_count} exercises across {len(plan.weekly_plan)} days.",
+            "refreshed_count": refreshed_count,
+        }
 
     def _modify_user_workout_plan_action(
         self,
@@ -491,15 +385,6 @@ class AgentToolsBuilder:
             args_schema=GeneratePlanInput,
         )(self._generate_and_save_workout_plan_action)
 
-        lookup_youtube_shorts_exercises = tool(
-            "lookup_youtube_shorts_exercises",
-            description=(
-                "Search YouTube Shorts exercise videos by explicit exercise names or by target muscle group, "
-                "and return structured exercise options."
-            ),
-            args_schema=ExerciseLookupInput,
-        )(self._lookup_youtube_shorts_exercises_action)
-        
         update_user_workout_progress = tool(
             "update_user_workout_progress",
             description="Update completion status and notes for a workout day in the latest saved plan.",
@@ -524,15 +409,23 @@ class AgentToolsBuilder:
             ),
             args_schema=ModifyWorkoutPlanInput,
         )(self._modify_user_workout_plan_action)
-        
+
+        refresh_exercise_videos = tool(
+            "refresh_exercise_videos",
+            description=(
+                "Re-fetch YouTube video URLs for every exercise in the user's latest saved workout plan. "
+                "Use this when the user asks to refresh, update, or fix exercise videos."
+            ),
+        )(self._refresh_exercise_videos_action)
+
         return [
             get_workout_state,
             generate_and_save_workout_plan,
-            lookup_youtube_shorts_exercises,
             update_user_workout_progress,
             delete_latest_workout_plan_tool,
             delete_all_workout_plans_tool,
             modify_user_workout_plan,
+            refresh_exercise_videos,
         ]
 
 

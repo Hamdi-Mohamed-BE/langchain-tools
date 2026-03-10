@@ -5,3 +5,7 @@ __pycache__/
 uv.lock
 ai_gym.db
 .venv/
+node_modules/
+dist/
+.expo/
+package-lock.json

@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "AI Gym Coach",
+    "slug": "ai-gym-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0B1B2B"
+      }
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}

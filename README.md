@@ -1,430 +1,474 @@
 # AI Gym Coach Chatbot
 
-FastAPI + LangChain + Gemini scaffold for an AI gym coaching chatbot.
+An AI-powered gym coaching chatbot that generates personalized weekly workout plans, sources exercise demo videos from YouTube Shorts, and provides real-time conversational coaching — all driven by Google Gemini via LangChain tool-calling agents.
 
-This project currently provides:
-- auth endpoints (register/login)
-- chat endpoints (normal + streaming SSE)
-- workout plan generation and persistence
-- YouTube Shorts exercise sourcing (API + fallback seed)
-- temporary web UI for chat and workout view
+## App Preview
+
+<video src="videos/ai_gym.mp4" width="100%" controls></video>
+
+---
+
+## Features
+
+- **AI Workout Generation** — Gemini builds fully personalized multi-day training plans based on user goals (no hardcoded exercise databases)
+- **YouTube Shorts Exercise Videos** — Each exercise is automatically enriched with a short-form demo video via YouTube Data API
+- **Real-Time Streaming Chat** — Token-by-token responses over SSE and WebSocket with tool event visibility
+- **Plan Modification** — Ask the AI to swap exercises, change days, or regenerate parts of your plan conversationally
+- **Usage Tracking** — Token consumption and estimated cost per chat session
+- **Chat History** — Persistent message history with preload on reconnect
+- **Dark Mode** — Tailwind-based web UI with persisted light/dark theme toggle
+- **Mobile App** — Expo + React Native client with WebSocket chat, auth, and embedded YouTube Shorts player
+- **Auth System** — Email/password registration and JWT-based login
+
+---
 
 ## Architecture
 
-Runtime flow:
+```
+┌──────────────────┐     ┌──────────────────┐
+│  Web UI (HTML/JS)│     │ Mobile (Expo/RN)  │
+│  static/         │     │ mobile/           │
+└────────┬─────────┘     └────────┬──────────┘
+         │  HTTP / SSE            │  WebSocket
+         └──────────┬─────────────┘
+                    ▼
+          ┌─────────────────┐
+          │  FastAPI Server  │
+          │  app/main.py     │
+          └────────┬─────────┘
+                   │
+    ┌──────────────┼──────────────┐
+    ▼              ▼              ▼
+ Routers       Services      AI Layer
+ /auth         auth_service   llm_client.py
+ /chat         chat_service   agent_tools.py
+ /workouts     workout_svc    context_manager.py
+               exercise_svc
+               image_svc
+                   │
+    ┌──────────────┼──────────────┐
+    ▼              ▼              ▼
+ Repositories    Tools         External APIs
+ user_repo     workout_gen    Google Gemini
+ chat_repo     youtube_shorts YouTube Data API
+ workout_repo  db_tools
+                   │
+                   ▼
+              SQLAlchemy
+            (SQLite / PostgreSQL)
+```
 
-1. Browser sends requests to FastAPI.
-2. Routers call service layer.
-3. Services use repositories/tools.
-4. Chat service calls LangChain Gemini client.
-5. SQLAlchemy stores users/chat/workouts.
+### Request Flow
 
-Main code entrypoints:
-- App bootstrap: `app/main.py`
-- Settings/env: `app/core/config.py`
-- DB engine/session: `app/core/database.py`
-- Gemini client: `app/ai/llm_client.py`
-- Chat orchestration: `app/services/chat_service.py`
+1. Client sends a message (HTTP, SSE, or WebSocket).
+2. Router delegates to `ChatService`.
+3. `ChatService` builds optimized context (trimmed history + current workout state + tool policy).
+4. `LLMClient` invokes Gemini with LangChain agent tools bound.
+5. Gemini decides which tools to call (workout generation, exercise lookup, plan modification, etc.).
+6. Tool results feed back into the agent loop until a final text response is produced.
+7. Response tokens stream to the client; usage metadata and assistant reply are persisted.
+
+---
 
 ## Project Structure
 
 ```text
-app/
-	main.py
-	core/
-		config.py
-		database.py
-	routers/
-		auth_router.py
-		chat_router.py
-		workout_router.py
-	services/
-		auth_service.py
-		chat_service.py
-		workout_service.py
-		exercise_service.py
-		image_service.py
-	repositories/
-		user_repo.py
-		chat_repo.py
-		workout_repo.py
-	tools/
-		workout_generator.py
-		youtube_shorts_tool.py
-		db_tools.py
-	schemas/
-		auth.py
-		chat.py
-		workout.py
-		exercise.py
-	models/
-		user.py
-		chat_message.py
-		workout_plan.py
-		exercise.py
-static/
-	index.html
-	styles.css
-	app.js
-run_server.sh
-setup_server.sh
-pyproject.toml
-.env.example
-IMPLEMENTATION_PROGRESS.md
+├── app/
+│   ├── main.py                  # FastAPI app, CORS, router mounting, DB init
+│   ├── ai/
+│   │   ├── agent_tools.py       # LangChain @tool definitions (AgentToolsBuilder)
+│   │   ├── context_manager.py   # Conversation history trimming
+│   │   └── llm_client.py        # Gemini chat model wrapper
+│   ├── core/
+│   │   ├── config.py            # Pydantic Settings (env parsing)
+│   │   └── database.py          # SQLAlchemy engine & session
+│   ├── models/
+│   │   ├── user.py              # User table
+│   │   ├── chat_message.py      # Chat history table
+│   │   ├── chat_usage.py        # Token usage tracking table
+│   │   ├── workout_plan.py      # Workout plan table
+│   │   └── exercise.py          # Exercise table
+│   ├── repositories/
+│   │   ├── user_repo.py         # User CRUD
+│   │   ├── chat_repo.py         # Message persistence
+│   │   └── workout_repo.py      # Workout plan CRUD
+│   ├── routers/
+│   │   ├── auth_router.py       # POST /auth/register, /auth/login
+│   │   ├── chat_router.py       # POST /chat/message, GET /chat/stream, WS /chat/ws, GET /chat/history, GET /chat/usage/summary
+│   │   └── workout_router.py    # POST /workouts/generate, GET /workouts/latest
+│   ├── schemas/
+│   │   ├── auth.py              # Auth request/response models
+│   │   ├── chat.py              # Chat message schemas
+│   │   ├── workout.py           # Workout plan schemas
+│   │   └── exercise.py          # Exercise data schemas
+│   ├── services/
+│   │   ├── auth_service.py      # JWT + password hashing
+│   │   ├── chat_service.py      # Chat orchestration, tool policy, sanitization
+│   │   ├── workout_service.py   # Workout generation orchestration
+│   │   ├── exercise_service.py  # Exercise lookup service
+│   │   └── image_service.py     # Image analysis (placeholder)
+│   └── tools/
+│       ├── workout_generator.py # Deterministic plan builder
+│       ├── youtube_shorts_tool.py # YouTube Shorts exercise adapter
+│       └── db_tools.py          # DB persistence helpers
+├── static/
+│   ├── index.html               # Web UI (dark mode, Tailwind)
+│   ├── styles.css
+│   └── app.js
+├── mobile/
+│   ├── App.tsx                  # Expo/RN entry (auth + chat + workout views)
+│   ├── src/
+│   │   ├── components/          # MessageBubble, YouTubeShort
+│   │   ├── config/              # API base URL config
+│   │   ├── services/            # authApi, chatSocket
+│   │   ├── types/               # TypeScript types
+│   │   └── utils/               # YouTube URL helpers
+│   ├── package.json
+│   └── app.json
+├── videos/                      # App preview videos (add here)
+├── setup_server.sh              # One-time server bootstrap
+├── run_server.sh                # Daily server start
+├── setup_mobile.bat             # One-time mobile bootstrap (Windows)
+├── run_mobile.bat               # Daily mobile start (Windows)
+├── pyproject.toml               # Python dependencies (uv)
+└── .env.example                 # Environment variable template
 ```
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| **Backend** | FastAPI, SQLAlchemy, Pydantic, Uvicorn |
+| **AI/LLM** | Google Gemini (via `langchain-google-genai`), LangChain tool-calling agents |
+| **Database** | SQLite (default) / PostgreSQL |
+| **Web Frontend** | HTML, Tailwind CSS, Vanilla JS, SSE |
+| **Mobile** | Expo SDK 54, React Native, TypeScript, WebSocket |
+| **Package Mgmt** | `uv` (Python), `yarn` (mobile) |
+| **External APIs** | YouTube Data API v3 (Shorts exercise videos) |
+
+---
 
 ## Prerequisites
 
+### Backend
 - Python 3.11+
-- `uv` package manager
+- `uv` package manager (auto-installed by setup script)
 
-You can let the script install prerequisites automatically (see quick start below).
+### Mobile
+- Node.js 20.19+
+- Yarn (enabled via Corepack)
+- Expo Go app on your phone (or Android/iOS emulator)
+
+---
 
 ## Quick Start
 
-First-time setup (installs Python/uv if needed, creates venv, syncs deps, then runs server):
+### Backend Server
+
+**First-time setup** (installs Python/uv if needed, creates venv, syncs deps, bootstraps `.env`):
 
 ```bash
 bash setup_server.sh
 ```
 
-What `setup_server.sh` does:
-1. Installs Python if missing.
-2. Installs `uv` if missing.
-3. Creates `.env` from `.env.example` (if `.env` does not exist).
-4. Runs `uv venv`, `uv sync`, and starts the server.
-
-Daily run (no install, no re-sync):
+**Daily run** (no reinstall, no re-sync):
 
 ```bash
 bash run_server.sh
 ```
 
-What `run_server.sh` does:
-1. Verifies `uv` exists.
-2. Verifies `.venv` exists.
-3. Starts the FastAPI server only.
+The server starts on `http://0.0.0.0:8000` with `--reload` enabled.
 
-## Manual Setup (uv)
+**Manual setup** (if you prefer):
 
 ```bash
 uv venv
 uv sync
+cp .env.example .env   # then edit .env with your keys
 uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-Open:
-- API docs: `http://127.0.0.1:8000/docs`
-- Temp UI: `http://127.0.0.1:8000/static/index.html`
-- Root health-ish endpoint: `http://127.0.0.1:8000/`
+**Access points:**
+
+| URL | Description |
+|-----|-------------|
+| `http://127.0.0.1:8000/docs` | Swagger API docs |
+| `http://127.0.0.1:8000/static/index.html` | Web UI |
+| `http://127.0.0.1:8000/` | Health check |
+
+### Mobile App
+
+**First-time setup** (Windows — installs Node.js/Yarn if needed, syncs deps):
+
+```bat
+setup_mobile.bat
+```
+
+**Daily run** (Windows):
+
+```bat
+run_mobile.bat
+```
+
+**Manual setup:**
+
+```bash
+cd mobile
+yarn install
+yarn start
+```
+
+Then press `a` for Android, `i` for iOS, or scan the QR code with Expo Go.
+
+> **Tip:** For physical devices, set `EXPO_PUBLIC_API_BASE_URL` in `mobile/.env` to your machine's LAN IP (e.g., `http://192.168.1.100:8000`). For Android emulator use `http://10.0.2.2:8000`.
+
+---
 
 ## Environment Variables
 
-Copy `.env.example` to `.env` and set values.
+Copy `.env.example` to `.env` and fill in values.
 
-Required:
+### Required
 
-```dotenv
-GOOGLE_API_KEY=
-```
+| Variable | Description |
+|----------|-------------|
+| `GOOGLE_API_KEY` | Google AI API key for Gemini |
 
-Required for live exercise video sourcing (otherwise local fallback seed is used):
+### Recommended
 
-```dotenv
-YOUTUBE_API_KEY=
-```
+| Variable | Description |
+|----------|-------------|
+| `YOUTUBE_API_KEY` | YouTube Data API key for exercise video lookup (falls back to seed data if missing) |
+| `JWT_SECRET_KEY` | Secret for signing JWT tokens |
 
-Model selection:
+### Optional
 
-```dotenv
-GEMINI_MODEL=gemini-2.5-flash
-```
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model name |
+| `DATABASE_URL` | `sqlite:///./ai_gym.db` | SQLAlchemy connection string |
+| `JWT_ALGORITHM` | `HS256` | JWT signing algorithm |
+| `JWT_EXPIRE_MINUTES` | `1440` | Token expiry (24h) |
+| `YOUTUBE_API_BASE_URL` | `https://www.googleapis.com/youtube/v3` | YouTube API base |
+| `YOUTUBE_REGION_CODE` | `US` | YouTube search region |
+| `CORS_ALLOW_ORIGINS` | `*` | Allowed CORS origins |
 
-Backward-compatible fallback (legacy typo key also supported):
+### Mobile (`mobile/.env`)
 
-```dotenv
-GEMENI_MODEL=
-```
+| Variable | Description |
+|----------|-------------|
+| `EXPO_PUBLIC_API_BASE_URL` | Backend URL (e.g., `http://10.0.2.2:8000` for Android emulator) |
 
-Other useful settings:
+---
 
-```dotenv
-DATABASE_URL=sqlite:///./ai_gym.db
-REDIS_URL=redis://localhost:6379/0
-JWT_SECRET_KEY=ANYTHING_RANDOM_AND_SECRET
-JWT_ALGORITHM=HS256
-JWT_EXPIRE_MINUTES=1440
-YOUTUBE_API_KEY=
-YOUTUBE_API_BASE_URL=https://www.googleapis.com/youtube/v3
-YOUTUBE_REGION_CODE=US
-```
+## AI Agent Tools
 
-Env parsing code:
-- `app/core/config.py`
+The LLM has access to the following tools via LangChain's tool-calling agent flow. The model autonomously decides which tools to invoke based on the user's message.
 
-## LangChain Documentation (Project-Specific)
+| Tool | Description |
+|------|-------------|
+| `get_workout_state` | Fetches the user's latest workout plan and progress summary |
+| `generate_and_save_workout_plan` | Generates a personalized multi-day plan based on goals, enriches exercises with YouTube Shorts videos, and saves to DB |
+| `lookup_youtube_shorts_exercises` | Searches YouTube Shorts for exercise demo videos by muscle group or exercise name |
+| `modify_user_workout_plan` | Swaps a specific exercise in the plan with a new one (auto-fetches replacement video) |
+| `update_user_workout_progress` | Marks exercises as completed for a day with optional notes |
+| `refresh_exercise_videos` | Re-fetches YouTube video URLs for all exercises in the current plan |
+| `delete_latest_workout_plan` | Removes the most recent workout plan |
+| `delete_all_workout_plans` | Clears all workout plans for the user |
 
-This section explains exactly how LangChain is used in this codebase.
+Tool source: `app/ai/agent_tools.py` (uses `AgentToolsBuilder` pattern with `@tool` decorators)
 
-### LangChain Components Used
+### Tool Flow in Chat
 
-- Chat model wrapper: `ChatGoogleGenerativeAI`
-- Message primitives: `SystemMessage`, `HumanMessage`
-- Async invocation patterns: `.ainvoke(...)` and `.astream(...)`
+1. `ChatService` injects a **tool policy** into the system prompt, guiding Gemini on when to use each tool.
+2. Gemini analyzes the user message and calls tools as needed (e.g., generating a plan, looking up exercises).
+3. Tool results feed back into the agent loop until Gemini produces a final text response.
+4. Tool events are streamed to the client in real time (`{"type":"tool","tool":"...","text":"..."}`).
 
-Code reference:
-- `app/ai/llm_client.py`
+### Adding a New Tool
 
-### How Request -> LangChain -> Response Works
+1. Implement logic in `app/tools/<new_tool>.py`.
+2. Use Pydantic models for typed input/output.
+3. Add a service wrapper in `app/services/` if needed.
+4. Register the tool in `AgentToolsBuilder` (`app/ai/agent_tools.py`).
+5. Update tool policy in `ChatService` if the LLM needs guidance on when to use it.
 
-1. Router receives request in `app/routers/chat_router.py`.
-2. Router calls `ChatService` in `app/services/chat_service.py`.
-3. `ChatService` builds context and calls `LLMClient`.
-4. `LLMClient` builds LangChain messages (`SystemMessage`, `HumanMessage`).
-5. LangChain calls Gemini and returns text.
-6. Service stores assistant response in DB.
+---
 
-### Non-Streaming LangChain Call
-
-Implemented in `LLMClient.generate_response` (`app/ai/llm_client.py`):
-
-```python
-messages = [
-		SystemMessage(content="..."),
-		HumanMessage(content=f"Context: {context}\n\nUser: {user_message}"),
-]
-response = await self.llm.ainvoke(messages)
-return str(response.content)
-```
-
-### Streaming LangChain Call
-
-Implemented in `LLMClient.stream_response` (`app/ai/llm_client.py`):
-
-```python
-async for chunk in self.llm.astream(messages):
-		text = chunk.content if isinstance(chunk.content, str) else ""
-		if text:
-				yield text
-```
-
-The router converts these chunks to SSE events in `app/routers/chat_router.py`.
-
-### LangChain Model Configuration
-
-Configured in:
-- `app/ai/llm_client.py`
-- `app/core/config.py`
-
-Current fields used:
-- `google_api_key`
-- `resolved_gemini_model` (supports `GEMINI_MODEL` and fallback `GEMENI_MODEL`)
-
-## LangChain Tools Documentation
-
-In this project, "tools" are deterministic backend functions/services that the chat layer can call before or alongside LLM generation.
-
-Current tool code lives in:
-- `app/tools/workout_generator.py`
-- `app/tools/youtube_shorts_tool.py`
-- `app/tools/db_tools.py`
-
-### Tool Catalog
-
-`generate_workout_plan`
-- Location: `app/tools/workout_generator.py`
-- Purpose: Build a typed weekly workout plan (`WorkoutPlanData`) from goal and training days.
-- Input: `goal: str`, `days_per_week: int`
-- Output: `WorkoutPlanData`
-- Used by:
-	- `app/services/workout_service.py`
-	- `app/services/chat_service.py`
-
-`YouTubeShortsAdapter.get_exercises`
-- Location: `app/tools/youtube_shorts_tool.py`
-- Purpose: Return typed exercise list (`ExerciseData`) by muscle group.
-- Input: `muscle_group: str`
-- Output: `list[ExerciseData]`
-- API integration: calls YouTube Data API `GET /search` with shorts-focused query and `videoDuration=short`.
-- Fallback behavior: if API key is missing or request fails, uses local seed data.
-- Used by:
-	- `app/services/exercise_service.py`
-	- `app/services/chat_service.py`
-
-`save_workout_plan`
-- Location: `app/tools/db_tools.py`
-- Purpose: Persist a typed workout plan via repository helper.
-- Input: SQLAlchemy session, `user_id`, `week_start`, `WorkoutPlanData`
-- Output: persisted workout row
-
-### How Tools Are Triggered in Chat
-
-Tool orchestration currently happens in `app/services/chat_service.py`.
-
-Current behavior:
-- LangChain agent tools are built in `app/ai/agent_tools.py` and passed to `LLMClient`.
-- The model decides tool calls, guided by the tool policy injected by `ChatService`.
-- Primary exercise lookup tool is `lookup_youtube_shorts_exercises`.
-- Workout edits use `modify_user_workout_plan` to swap exercises without regenerating the whole plan.
-
-### Tooling Extension Guide
-
-To add a new tool:
-
-1. Implement deterministic logic in `app/tools/<new_tool>.py`.
-2. Use Pydantic models for input/output where possible.
-3. Add service wrapper if needed in `app/services/`.
-4. Call it from `ChatService` and append structured output to context.
-5. Add endpoint docs and example in this README.
-
-### Tool Safety and Reliability Notes
-
-- Keep tool outputs structured and typed (Pydantic).
-- Keep external API calls behind adapter classes.
-- Keep LLM focused on reasoning/text generation while tools provide deterministic data.
-- Validate boundaries at schema level (`app/schemas/`).
-
-## API Reference (With Examples)
+## API Reference
 
 All routes are mounted in `app/main.py`.
 
-### Auth
+### Authentication
 
-Route code:
-- `app/routers/auth_router.py`
-
-Register:
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/auth/register` | Create a new user account |
+| POST | `/auth/login` | Login and receive JWT token |
 
 ```bash
+# Register
 curl -X POST "http://127.0.0.1:8000/auth/register" \
-	-H "Content-Type: application/json" \
-	-d '{"email":"user@example.com","password":"strongpass123"}'
-```
+  -H "Content-Type: application/json" \
+  -d '{"email":"user@example.com","password":"strongpass123"}'
 
-Login:
-
-```bash
+# Login
 curl -X POST "http://127.0.0.1:8000/auth/login" \
-	-H "Content-Type: application/json" \
-	-d '{"email":"user@example.com","password":"strongpass123"}'
+  -H "Content-Type: application/json" \
+  -d '{"email":"user@example.com","password":"strongpass123"}'
 ```
 
-### Chat (Non-Streaming)
+Response:
 
-Route code:
-- `app/routers/chat_router.py`
-
-```bash
-curl -X POST "http://127.0.0.1:8000/chat/message" \
-	-H "Content-Type: application/json" \
-	-d '{"user_id":1,"message":"Build me a 4-day hypertrophy plan"}'
+```json
+{
+  "access_token": "eyJ...",
+  "token_type": "bearer",
+  "user_id": 1
+}
 ```
 
-### Chat (Streaming SSE)
+### Chat
 
-SSE route:
-- `GET /chat/stream`
-- implementation: `app/routers/chat_router.py`
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/chat/message` | Send a message, get a single response |
+| GET | `/chat/stream` | SSE streaming chat (token-by-token) |
+| WS | `/chat/ws` | WebSocket streaming chat |
+| GET | `/chat/history` | Load previous messages for a user |
+| GET | `/chat/usage/summary` | Token usage and cost summary |
 
-Browser example:
+**SSE streaming example:**
 
 ```javascript
 const source = new EventSource(
-	"/chat/stream?user_id=1&message=" + encodeURIComponent("Give me a push day workout")
+  "/chat/stream?user_id=1&message=" + encodeURIComponent("Build me a 4-day hypertrophy plan")
 );
 
 source.onmessage = (event) => {
-	const payload = JSON.parse(event.data);
-	console.log(payload);
+  const payload = JSON.parse(event.data);
+  // payload.type: "status" | "tool" | "token" | "usage" | "done"
+  console.log(payload);
 };
 ```
 
-SSE payload types currently emitted:
-- `{"type":"status","text":"Thinking..."}`
-- `{"type":"tool","tool":"...","text":"..."}`
-- `{"type":"usage","model":"...","input_tokens":123,"output_tokens":45,"estimated_cost_usd":0.000123}`
-- `{"type":"token","text":"..."}`
-- `{"type":"done"}`
+**WebSocket example:**
+
+```javascript
+const ws = new WebSocket("ws://127.0.0.1:8000/chat/ws");
+ws.onopen = () => {
+  ws.send(JSON.stringify({ user_id: 1, message: "Give me a push day workout" }));
+};
+ws.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  // data.type: "status" | "tool" | "token" | "usage" | "done" | "error"
+};
+```
+
+**SSE/WebSocket event types:**
+
+| Type | Description |
+|------|-------------|
+| `status` | Status update (e.g., "Thinking...") |
+| `tool` | Tool invocation event with tool name and result text |
+| `token` | Single text token from the LLM response |
+| `usage` | Token counts, model name, and estimated cost in USD |
+| `done` | Stream complete |
+| `error` | Error message (WebSocket only) |
 
 ### Workout Plans
 
-Route code:
-- `app/routers/workout_router.py`
-
-Generate and save plan:
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/workouts/generate` | Generate and save a workout plan |
+| GET | `/workouts/latest` | Get the latest saved plan for a user |
 
 ```bash
+# Generate plan
 curl -X POST "http://127.0.0.1:8000/workouts/generate" \
-	-H "Content-Type: application/json" \
-	-d '{"user_id":1,"goal":"muscle gain","days_per_week":4}'
-```
+  -H "Content-Type: application/json" \
+  -d '{"user_id":1,"goal":"muscle gain","days_per_week":4}'
 
-Get latest saved plan:
-
-```bash
+# Get latest plan
 curl "http://127.0.0.1:8000/workouts/latest?user_id=1"
 ```
 
-Schema definitions:
-- `app/schemas/workout.py`
-
-## Data and Typing
-
-This codebase uses Pydantic classes for API and internal payloads:
-- chat schemas: `app/schemas/chat.py`
-- workout schemas: `app/schemas/workout.py`
-- exercise schema: `app/schemas/exercise.py`
-
-Workout generator returns typed plan objects:
-- `app/tools/workout_generator.py`
-
-Exercise tool returns typed exercise objects:
-- `app/tools/youtube_shorts_tool.py`
-
-## Frontend (Temporary)
-
-Files:
-- `static/index.html`
-- `static/styles.css`
-- `static/app.js`
-
-What it supports now:
-- send streaming chat message
-- fetch latest workout plan
+---
 
 ## Database
 
-Current default DB:
-- SQLite file at `ai_gym.db`
+- **Default:** SQLite (`ai_gym.db` in project root)
+- **Production:** Set `DATABASE_URL` to a PostgreSQL connection string
+- **Table creation:** Automatic on app startup via `Base.metadata.create_all()`
 
-Model definitions:
-- `app/models/user.py`
-- `app/models/chat_message.py`
-- `app/models/workout_plan.py`
-- `app/models/exercise.py`
+### Tables
 
-DB table creation currently happens at app startup in:
-- `app/main.py`
+| Table | Model | Description |
+|-------|-------|-------------|
+| `users` | `app/models/user.py` | User accounts (email, password hash) |
+| `chat_messages` | `app/models/chat_message.py` | Chat history per user |
+| `chat_usage` | `app/models/chat_usage.py` | Token usage and cost tracking per request |
+| `workout_plans` | `app/models/workout_plan.py` | Saved workout plans (JSON) |
+| `exercises` | `app/models/exercise.py` | Exercise metadata |
+
+---
+
+## Web Frontend
+
+A temporary Tailwind-based UI served from `static/`.
+
+- **Chat interface** with real-time SSE streaming and tool event display
+- **Workout panel** showing the latest plan with exercise video links
+- **Dark mode** toggle with persistent theme preference
+- **Usage display** showing cumulative token count and estimated cost
+- **Chat history** preload by user ID
+
+---
+
+## Mobile App
+
+A React Native app built with Expo SDK 54 and TypeScript.
+
+### Features
+
+- Email/password signup and login with session persistence (AsyncStorage)
+- Real-time WebSocket chat with token-by-token streaming
+- Tool event rendering in chat
+- Usage stats display
+- Workout plan viewer with embedded YouTube Shorts player
+- Configurable backend URL for physical device testing
+
+### Mobile Tech
+
+| Package | Purpose |
+|---------|---------|
+| `expo` (SDK 54) | React Native framework |
+| `react-native-youtube-iframe` | Embedded YouTube player |
+| `@react-native-async-storage/async-storage` | Auth session persistence |
+| `react-native-webview` | WebView for video rendering |
+
+See `mobile/MOBILE_APP.md` for detailed mobile documentation.
+
+---
 
 ## Troubleshooting
 
-`uv` command not found after installation:
-- open a new terminal and run again
-- or add `~/.local/bin` to PATH
+| Problem | Solution |
+|---------|----------|
+| `uv` command not found | Open a new terminal, or add `~/.local/bin` to PATH |
+| Gemini auth/model errors | Verify `GOOGLE_API_KEY` in `.env`; ensure `GEMINI_MODEL` is a valid model name |
+| YouTube videos not loading | Verify `YOUTUBE_API_KEY` in `.env`; if missing, fallback seed data is used |
+| No workout on `/workouts/latest` | Generate a plan first via chat or `/workouts/generate` |
+| Mobile can't connect to backend | Set `EXPO_PUBLIC_API_BASE_URL` to your LAN IP; ensure backend runs on `0.0.0.0` |
+| WSL + Android emulator issues | Use Expo Go QR code on a physical device, or set `ANDROID_HOME` in your shell |
+| `npm install` deprecation warnings | These are transitive dependencies from React Native / Expo toolchain — safe to ignore |
 
-Gemini auth/model errors:
-- verify `.env` contains valid `GOOGLE_API_KEY`
-- ensure model name is valid in `GEMINI_MODEL` or `GEMENI_MODEL`
-
-YouTube exercise lookup not returning videos:
-- verify `.env` contains valid `YOUTUBE_API_KEY`
-- confirm `YOUTUBE_API_BASE_URL` is `https://www.googleapis.com/youtube/v3`
-- if key is missing/invalid, fallback exercise list will be used
-
-No workout found on `/workouts/latest`:
-- call `/workouts/generate` first for that `user_id`
+---
 
 ## Dev Notes
 
-- Implementation tracking file: `IMPLEMENTATION_PROGRESS.md`
+- Implementation log: `IMPLEMENTATION_PROGRESS.md`
 - Technical plan: `ai_gym_chatbot_plan.md`
+- Mobile docs: `mobile/MOBILE_APP.md`

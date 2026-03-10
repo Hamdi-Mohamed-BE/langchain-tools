@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     # Keep compatibility with the user's current key name typo.
     gemini_model: str = "gemini-2.5-flash"
     gemeni_model: str = ""
+    cors_allow_origins: str = "*"
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -29,6 +30,14 @@ class Settings(BaseSettings):
     @property
     def resolved_gemini_model(self) -> str:
         return self.gemeni_model or self.gemini_model
+
+    @property
+    def cors_origins(self) -> list[str]:
+        raw = (self.cors_allow_origins or "*").strip()
+        if raw == "*":
+            return ["*"]
+        values = [item.strip() for item in raw.split(",") if item.strip()]
+        return values or ["*"]
 
 
 settings = Settings()
